@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+ <meta charset="utf-8" />
+ <title>Monitoramento — Estufa</title>
+ <meta name="viewport" content="width=device-width,initial-scale=1" />
+ <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+ <style>
+  /* ====== ESTILO GERAL ====== */
+  body {
+    font-family: 'Poppins', Arial, sans-serif;
+    background: #121212;
+    color: #e0e0e0;
+    margin: 0;
+    padding: 20px;
+  }
+
+  h1 {
+    font-size: 1.8rem;
+    text-align: center;
+    margin-bottom: 6px;
+    color: #00e676;
+    letter-spacing: 0.5px;
+  }
+
+  h2 {
+    margin-top: 20px;
+    color: #81d4fa;
+    font-size: 1.2rem;
+    border-left: 4px solid #00e676;
+    padding-left: 8px;
+  }
+
+  #status {
+    text-align: center;
+    margin-bottom: 20px;
+    color: #aaa;
+    font-size: 0.95rem;
+  }
+
+  /* ====== CONTAINERS ====== */
+  .card {
+    background: #1e1e1e;
+    border-radius: 12px;
+    box-shadow: 0 0 15px rgba(0,0,0,0.5);
+    padding: 20px;
+    margin-bottom: 25px;
+  }
+
+  canvas {
+    margin-top: 15px;
+  }
+
+  /* ====== LISTA DE LEITURAS ====== */
+  #data-container {
+    max-height: 320px;
+    overflow-y: auto;
+    padding: 12px;
+    border-radius: 10px;
+    background: #212121;
+    border: 1px solid #333;
+  }
+
+  ul { list-style: none; margin: 0; padding: 0; }
+
+  li {
+    border-bottom: 1px solid #333;
+    padding: 10px 0;
+  }
+
+  li:last-child {
+    border-bottom: none;
+  }
+
+  strong {
+    color: #fff;
+  }
+
+  .timestamp {
+    color: #999;
+    font-size: 0.85rem;
+    margin-top: 4px;
+  }
+
+  /* ====== BARRA DE ROLAGEM ====== */
+  #data-container::-webkit-scrollbar {
+    width: 6px;
+  }
+  #data-container::-webkit-scrollbar-thumb {
+    background-color: #555;
+    border-radius: 4px;
+  }
+  #data-container::-webkit-scrollbar-thumb:hover {
+    background-color: #777;
+  }
+
+  /* ====== ANIMAÇÃO SUAVE ====== */
+  .fade-in {
+    animation: fadeIn 0.4s ease-in;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+ </style>
+</head>
+<body>
+ <h1>🌱 Painel de Monitoramento da Estufa</h1>
+ <div id="status">Carregando dados...</div>
+
+ <div class="card">
+  <h2>Gráfico em Tempo Real</h2>
+  <canvas id="chart" height="120"></canvas>
+ </div>
+
+ <div class="card">
+  <h2>Leituras Recentes (últimos 20 registros)</h2>
+  <div id="data-container">
+   <ul id="readings"></ul>
+  </div>
+ </div>
+
+ <script>
+  const baseUrl = 'https://estufa-b2a52-default-rtdb.firebaseio.com';
+  const endpoint = '/estufa.json';
+  const statusEl = document.getElementById('status');
+  const readingsEl = document.getElementById('readings');
+
+  // ===== CONFIGURAÇÃO DO GRÁFICO =====
+  const ctx = document.getElementById('chart').getContext('2d');
+  const chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [
+        {
+          label: '🌡️ Temperatura (°C)',
+          borderColor: '#ff5252',
+          backgroundColor: 'rgba(255,82,82,0.1)',
+          data: [],
+          tension: 0.3,
+          yAxisID: 'y_temp_hum'
+        },
+        {
+          label: '💧 Umidade do Ar (%)',
+          borderColor: '#42a5f5',
+          backgroundColor: 'rgba(66,165,245,0.1)',
+          data: [],
+          tension: 0.3,
+          yAxisID: 'y_temp_hum'
+        },
+        {
+          label: '🌿 Umidade do Solo (%)',
+          borderColor: '#66bb6a',
+          backgroundColor: 'rgba(102,187,106,0.1)',
+          data: [],
+          tension: 0.3,
+          yAxisID: 'y_temp_hum'
+        },
+        {
+          label: '💡 Luminosidade',
+          borderColor: '#ffa726',
+          backgroundColor: 'rgba(255,167,38,0.1)',
+          data: [],
+          tension: 0.3,
+          yAxisID: 'y_light'
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      animation: false,
+      plugins: {
+        legend: {
+          labels: { color: '#eee' }
+        }
+      },
+      scales: {
+        x: {
+          ticks: { color: '#ccc' },
+          title: { display: true, text: 'Horário', color: '#ccc' },
+          grid: { color: '#333' }
+        },
+        y_temp_hum: {
+          type: 'linear',
+          position: 'left',
+          beginAtZero: true,
+          suggestedMax: 100,
+          title: { display: true, text: 'Temp / Umidade', color: '#ccc' },
+          ticks: { color: '#ccc' },
+          grid: { color: '#333' }
+        },
+        y_light: {
+          type: 'linear',
+          position: 'right',
+          beginAtZero: true,
+          suggestedMax: 4095,
+          title: { display: true, text: 'Luminosidade', color: '#ccc' },
+          ticks: { color: '#ccc' },
+          grid: { drawOnChartArea: false }
+        }
+      }
+    }
+  });
+
+  // ===== BUSCA E EXIBIÇÃO DOS DADOS =====
+  async function fetchData() {
+    try {
+      const res = await fetch(baseUrl + endpoint);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      statusEl.textContent = '🕒 Última atualização: ' + new Date().toLocaleTimeString();
+      render(data);
+    } catch (err) {
+      console.error(err);
+      statusEl.textContent = '⚠️ Erro ao buscar dados: ' + err.message;
+    }
+  }
+
+  function render(data) {
+    readingsEl.innerHTML = '';
+    if (!data) {
+      readingsEl.innerHTML = '<li>Sem leituras registradas.</li>';
+      return;
+    }
+
+    const entries = Object.entries(data);
+    entries.sort((a,b) => a[0] > b[0] ? 1 : -1);
+    const sliced = entries.slice(-20);
+
+    chart.data.labels = [];
+    chart.data.datasets.forEach(ds => ds.data = []);
+
+    sliced.forEach(([key, val]) => {
+      const ts = val.ts ? new Date(val.ts).toLocaleTimeString() : key;
+      const temp = val.temperatura ?? '—';
+      const hum = val.umidadeAr ?? '—';
+      const soil = val.umidadeSolo ?? '—';
+      const light = val.luzAnalogica ?? '—';
+
+      const li = document.createElement('li');
+      li.classList.add('fade-in');
+      li.innerHTML = `
+        <strong>Temp:</strong> ${temp} °C — 
+        <strong>Ar:</strong> ${hum} % — 
+        <strong>Solo:</strong> ${soil} % — 
+        <strong>Luz:</strong> ${light}
+        <div class="timestamp">${ts}</div>
+      `;
+      readingsEl.prepend(li);
+
+      if (typeof temp === 'number' && typeof hum === 'number' && typeof soil === 'number' && typeof light === 'number') {
+        chart.data.labels.push(ts);
+        chart.data.datasets[0].data.push(temp);
+        chart.data.datasets[1].data.push(hum);
+        chart.data.datasets[2].data.push(soil);
+        chart.data.datasets[3].data.push(light);
+      }
+    });
+
+    chart.update();
+  }
+
+  fetchData();
+  setInterval(fetchData, 5000);
+ </script>
+</body>
+</html>

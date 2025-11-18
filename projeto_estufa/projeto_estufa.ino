@@ -1,54 +1,45 @@
 // =================================================================
 // INCLUSÃO DE BIBLIOTECAS
 // =================================================================
-#include "DHT.h"
 #include <WiFi.h>
-#include <Firebase_ESP_Client.h>
-#include "time.h" // <<< ADICIONADA BIBLIOTECA PARA CONTROLE DE TEMPO
+#include <HTTPClient.h>
+#include "DHT.h"
 
 // =================================================================
-// SUAS CREDENCIAIS
+// CONFIGURAÇÃO DE WIFI E FIREBASE
 // =================================================================
-#define WIFI_SSID "LIA"
-#define WIFI_PASSWORD "Lucas1974"
-#define API_KEY "AIzaSyC-d7s582MNZtJMRIra23w2UFsi7WHavKQ"
-#define DATABASE_URL "https://estufa-b2a52-default-rtdb.firebaseio.com"
+#define WIFI_SSID "Bassora"
+#define WIFI_PASSWORD "#Vermelho071#"
+#define FIREBASE_HOST "estufa-b2a52-default-rtdb.firebaseio.com" // sem https:// e sem / no final
 
 // =================================================================
-// DEFINIÇÃO DE PINOS E CONFIGURAÇÕES
+// DEFINIÇÃO DE PINOS
 // =================================================================
 #define DHTPIN 27
 #define DHTTYPE DHT22
 #define SOILPIN 34
 #define LDR_DIGITAL_PIN 26
-#define LDR_ANALOG_PIN  25
-
-// =================================================================
-// CONFIGURAÇÕES DE TEMPO (NTP)
-// =================================================================
-const char* ntpServer = "pool.ntp.org";
-const long  gmtOffset_sec = -10800; // Offset para GMT-3 (Brasília)
-const int   daylightOffset_sec = 0;   // Sem horário de verão
+#define LDR_ANALOG_PIN 32
 
 // =================================================================
 // CALIBRAÇÃO E INTERVALOS
 // =================================================================
 int valorSoloSeco = 4095;
 int valorSoloMolhado = 1700;
-#define INTERVALO 5000 
+#define INTERVALO 5000 // 5 segundos entre leituras
 
 // =================================================================
 // OBJETOS GLOBAIS
 // =================================================================
 DHT dht(DHTPIN, DHTTYPE);
-unsigned long delayIntervalo;
-FirebaseData fbdo;
-FirebaseAuth auth;
-FirebaseConfig config;
+unsigned long delayIntervalo = 0;
 
+// =================================================================
+// SETUP
+// =================================================================
 void setup() {
   Serial.begin(115200);
-  Serial.println("--- Iniciando Estação de Monitoramento com Firebase ---");
+  Serial.println("\n--- Iniciando Estação de Monitoramento Local ---");
 
   // --- Conexão Wi-Fi ---
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -61,42 +52,25 @@ void setup() {
   Serial.print("Endereço IP: ");
   Serial.println(WiFi.localIP());
 
-  // --- [NOVO] SINCRONIZAÇÃO DE TEMPO VIA NTP ---
-  Serial.println("Sincronizando o tempo...");
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) {
-    Serial.println("!!! Falha ao obter a hora do servidor NTP.");
-    // Opcional: você pode decidir parar aqui se o tempo for crítico
-  } else {
-    Serial.println("Tempo sincronizado com sucesso!");
-    Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S"); // Imprime a data e hora
-  }
-
-  // --- Configuração do Firebase ---
-  config.api_key = API_KEY;
-  config.database_url = DATABASE_URL;
-  
-  Firebase.begin(&config, &auth);
-  Firebase.reconnectWiFi(true);
-
-  // --- Configuração dos Sensores ---
+  // --- Inicialização de sensores ---
   pinMode(LDR_DIGITAL_PIN, INPUT);
   dht.begin();
   delayIntervalo = millis() - INTERVALO;
 }
 
+// =================================================================
+// LOOP PRINCIPAL
+// =================================================================
 void loop() {
-  // O código do loop continua exatamente o mesmo
   if ((millis() - delayIntervalo) >= INTERVALO) {
     delayIntervalo = millis();
 
-    // ... (resto do seu código do loop que já está correto) ...
-    // --- 1. LEITURA DE TODOS OS SENSORES ---
+    // --- 1. LEITURA DOS SENSORES ---
     float umidadeAr = dht.readHumidity();
     float temperatura = dht.readTemperature();
-    int valorUmidadeSolo = analogRead(SOILPIN);
+    int valorSolo = analogRead(SOILPIN);
     int valorLuzAnalogico = analogRead(LDR_ANALOG_PIN);
+    int estadoLuzDigital = digitalRead(LDR_DIGITAL_PIN);
 
     if (isnan(umidadeAr) || isnan(temperatura)) {
       Serial.println("!!! Falha ao ler o sensor DHT22!");
@@ -104,50 +78,42 @@ void loop() {
     }
 
     // --- 2. PROCESSAMENTO DOS DADOS ---
-    int umidadeSoloPorcentagem = map(valorUmidadeSolo, valorSoloSeco, valorSoloMolhado, 0, 100);
+    int umidadeSoloPorcentagem = map(valorSolo, valorSoloSeco, valorSoloMolhado, 0, 100);
     umidadeSoloPorcentagem = constrain(umidadeSoloPorcentagem, 0, 100);
 
-    // --- 3. EXIBIÇÃO LOCAL (NO MONITOR SERIAL) ---
-    Serial.println("---------------------------------");
-    Serial.print("Umidade do Solo: ");
-    Serial.print(umidadeSoloPorcentagem);
-    Serial.println("%");
-    Serial.print("Umidade do Ar: ");
-    Serial.print(umidadeAr, 1);
-    Serial.print("% / Temperatura: ");
-    Serial.print(temperatura, 1);
-    Serial.println(" *C");
-    Serial.print("Luminosidade: ");
-    Serial.println(valorLuzAnalogico);
-    
-    // --- 4. ENVIO DOS DADOS PARA O FIREBASE (COM VERIFICAÇÃO SEPARADA) ---
+    // --- 3. ENVIO PARA O FIREBASE ---
     if (WiFi.status() == WL_CONNECTED) {
-      if (Firebase.ready()) {
-        FirebaseJson json;
-        json.set("temperatura", String(temperatura, 1));
-        json.set("umidadeAr", String(umidadeAr, 1));
-        json.set("umidadeSolo", umidadeSoloPorcentagem);
-        json.set("luminosidade", valorLuzAnalogico);
-        json.set("timestamp/.sv", "timestamp");
+      HTTPClient http;
+      String url = String("https://") + FIREBASE_HOST + "/estufa.json"; // nó "estufa"
+      http.begin(url);
+      http.addHeader("Content-Type", "application/json");
 
-        String path = "/leiturasAtuais";
-        
-        Serial.printf("Enviando dados para o Firebase em: %s\n", path.c_str());
-        
-        if (Firebase.RTDB.setJSON(&fbdo, path, &json)) {
-          Serial.println(">> Dados enviados com sucesso!");
-        } else {
-          Serial.println(">> ERRO ao enviar dados: " + fbdo.errorReason());
-        }
+      // Montar JSON com todos os sensores
+      String payload = "{";
+      payload += "\"temperatura\":" + String(temperatura, 1);
+      payload += ",\"umidadeAr\":" + String(umidadeAr, 1);
+      payload += ",\"umidadeSolo\":" + String(umidadeSoloPorcentagem);
+      payload += ",\"luzAnalogica\":" + String(valorLuzAnalogico);
+      payload += "}";
 
+      int httpCode = http.POST(payload);
+
+      if (httpCode > 0) {
+        String resp = http.getString();
+        Serial.printf("POST %d -> %s\n", httpCode, resp.c_str());
       } else {
-        Serial.println("!!! Conectado ao Wi-Fi, mas o Firebase não está pronto.");
-        Serial.println("!!! Causa provável: " + fbdo.errorReason()); // Adiciona mais detalhes do erro
+        Serial.printf("Erro no POST: %d\n", httpCode);
       }
 
+      http.end();
     } else {
-      Serial.println("!!! Falha na conexão Wi-Fi. Sem comunicação com a internet.");
+      Serial.println("WiFi desconectado.");
     }
+
+    // --- 4. EXIBIÇÃO LOCAL ---
+    Serial.println("---------------------------------");
+    Serial.printf("Temperatura: %.1f °C | Umidade Ar: %.1f%%\n", temperatura, umidadeAr);
+    Serial.printf("Umidade Solo: %d%% | Luz: %d (analog)\n", umidadeSoloPorcentagem, valorLuzAnalogico);
     Serial.println("---------------------------------");
   }
 }
