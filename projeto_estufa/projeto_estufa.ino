@@ -8,9 +8,9 @@
 // =================================================================
 // CONFIGURAÇÃO DE WIFI E FIREBASE
 // =================================================================
-#define WIFI_SSID "Bassora"
-#define WIFI_PASSWORD "#Vermelho071#"
-#define FIREBASE_HOST "estufa-b2a52-default-rtdb.firebaseio.com" // sem https:// e sem / no final
+#define WIFI_SSID ""
+#define WIFI_PASSWORD ""
+#define FIREBASE_HOST "" // sem https:// e sem / no final
 
 // =================================================================
 // DEFINIÇÃO DE PINOS
